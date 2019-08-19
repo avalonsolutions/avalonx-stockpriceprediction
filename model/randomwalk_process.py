@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import sys
 import argparse
-import pandas_datareader as web
+import pandas_datareader
 # import pandas
 import numpy
 import csv
@@ -10,30 +10,9 @@ import time
 import logging
 from random import randint
 
-logging.basicConfig(filename='./model_test.log', datefmt='%m/%d/%Y %I:%M:%S %p',
-                    level=logging.DEBUG,
-                    format='%(asctime)s %(filename)s: %(message)s',
-                    filemode='w')
-logging.getLogger("urllib3").propagate = False
-# logging.getLogger("requests").setLevel(logging.WARNING)
-logger = logging.getLogger(__name__)
-
-TRADING_DAYS = 252  # Number of trading days on stock, i.e. time interval of simulation
 
 
-def get_all_symbols_and_write():
-    """
-    The generate a csv file including companies' names, symbols and other information. Now we assume the file is
-    'Nasdaq Company List'. Because of Nasdaq update the file everyday. So we should run this function everyday to follow
-    the official updating.
-    :return:
-    """
-    all_nasdaq = web.get_nasdaq_symbols()
-    all_nasdaq.to_csv(path_or_buf='./data/nasdaq_symbols_all.csv')
-    return True
-
-
-class DataModel(object):
+class RandomWalkProcess(object):
     """
     This class does the random walk process based on the historical stocks prices (close prices) from Yahoo Finance.
     Users can select :
@@ -82,7 +61,7 @@ class DataModel(object):
         self.output_path = output_path
         self.output_path_single = output_path_single
         # to get the number of days a stock must have in the historical interval
-        self.the_correct_number_of_days = len(web.get_data_yahoo('QQQ', start=start_date, end=end_date))
+        self.the_correct_number_of_days = len(pandas_datareader.get_data_yahoo('QQQ', start=start_date, end=end_date))
         # if there is no specific company_symbol, then we go through all companies in Nasdaq Company List
         if isinstance(company_symbol, type(None)):
             with open(self.companies_symbols_file, 'r') as symbol_csv_file:
@@ -92,7 +71,7 @@ class DataModel(object):
             self.company_numbers = None
         self.HTCondor_environment = HTCondor_environment
 
-    def _get_symbols(self):
+    def _get_symbols_from_csv(self):
         """
         Get symbols of the stocks will be simulated from the csv file stored in self.companies_symbols_file .
         List of String, like [... , 'YCOM', 'YCS', 'YELP', ...] will be transferred to self.symbols_for_simulation
@@ -107,7 +86,7 @@ class DataModel(object):
                     del line['NASDAQ Symbol']
         self.symbols_for_simulation = symbols_list
 
-    def _from_yahoo_api(self, symbol):
+    def _fetch_from_yahoo_api(self, symbol):
         """
         Get the close price data from yahoo finance api.
         The prices will be transferred to self._raw_data
@@ -115,7 +94,7 @@ class DataModel(object):
         :return: True
         """
         try:
-            df = web.get_data_yahoo(symbol, start=self.start_date, end=self.end_date)
+            df = pandas_datareader.get_data_yahoo(symbol, start=self.start_date, end=self.end_date)
         except (KeyError, TypeError, IndexError) as err:
             logger.error(err)
             return False
@@ -125,7 +104,7 @@ class DataModel(object):
         self._raw_data = df  # ['Close']
         return True
 
-    def _write_csv_all(self):
+    def _write_all_simulations_to_csv(self):
         """
         To write the simulations into a csv file in the self.output_path
         :return: True
@@ -134,9 +113,10 @@ class DataModel(object):
             csv_writer = csv.writer(csvfile)
             for row in self.data:
                 csv_writer.writerow(row)
-        return True
 
     def _write_csv_single(self):
+        # TODO
+        # this is same as _write_all_simulations_to_csv() ?
         """
         To write the simulations into a csv file in the self.output_path
         :return: True
@@ -190,20 +170,21 @@ class DataModel(object):
         self.data = data
         return True
 
-    def to_simulate_all(self):
+    def simulate_all_stocks(self):
         """
         Do monte-carlo simulations for all stocks have historical prices of every trading day in the given time interval,
         and generate individual csv files for each stock. Path for the csv files is self.output_path
         :return: True
         """
-        assert isinstance(self.company, type(None)) and not isinstance(self.company_numbers, type(None)), \
-            "self.company must be None and self.company_numbers must be an available integer " \
-            "when we get simulation on a set of stocks."
+        assert self.company is None, '..'
+        assert self.company_numbers is not None, '..'
         self._get_symbols()
         for s in self.symbols_for_simulation:
+            # TODO
+            # class prop is supposed to be mutable from outside, better store in a var
             self.company = s
             # print("Symbol : ", s, "; -- ", self.symbols_for_simulation.index(s))
-            if self._from_yahoo_api(symbol=s):
+            if self._fetch_from_yahoo_api(symbol=s):
                 # print("Length: ", len(self._raw_data))
                 if len(self._raw_data) == self.the_correct_number_of_days:
                     # print(self._raw_data.index[0], self._raw_data.index[-1])
@@ -217,9 +198,8 @@ class DataModel(object):
             else:
                 continue
         del self.company
-        return True
 
-    def to_simulate_single_stock(self):
+    def simulate_single_stock(self):
         """
         Do monte-carlo simulation for a single given stock, self.company,
         have historical prices for every trading day in the given
@@ -229,7 +209,7 @@ class DataModel(object):
         assert not isinstance(self.company, type(None)) and isinstance(self.company_numbers, type(None)), \
             "self.company must be an available stock symbol " \
             "and self.company_numbers must be None when we get single simulation."
-        if self._from_yahoo_api(symbol=self.company):
+        if self._fetch_from_yahoo_api(symbol=self.company):
             try:
                 len(self._raw_data) == self.the_correct_number_of_days
             except:
@@ -254,44 +234,7 @@ class DataModel(object):
         return True
 
     def run(self):
-        if not isinstance(self.company, type(None)):  # then we would do simulation for single stock
-            self.to_simulate_single_stock()
+        if self.company:
+            self.simulate_single_stock() 
         else:
-            self.to_simulate_all()
-
-
-def _parse_args():
-    parser = argparse.ArgumentParser('randomwalk_process',
-                                     description='Monte-Carlo simulation of stock prices '
-                                                 'behavior based on data from Yahoo')
-    parser.add_argument('--start_date', type=str, default='2017-01-01',
-                        help="the start date of historical time interval")
-    parser.add_argument('--end_date', type=str, default='2019-01-01',
-                        help='the end date of historical time interval')
-    # parser.add_argument('--number_of_stocks', type=int, default=None,
-    #                     help="would be edited, hint: top returns")
-    parser.add_argument('--stock_symbols_file', help='path to csv file involving stock symbols')
-    parser.add_argument('--stock_symbol', type=str, help="symbol of a stock")
-    parser.add_argument('--HTCondor_env', type=int, help="in HTCondor environment or not.")
-    return parser.parse_args()
-
-
-def main():
-    logger.info("Starting model/model_test.py")
-    start_time = time.time()
-    args = _parse_args()
-    data_model = DataModel(start_date=args.start_date,
-                           end_date=args.end_date,
-                           # company_numbers=args.number_of_stocks,
-                           companies_symbols_file=args.stock_symbols_file,
-                           company_symbol=args.stock_symbol,
-                           HTCondor_environment=args.HTCondor_env)
-    data_model.run()
-    end_time = time.time()
-    logger.info("Execution time for simulating {} companies: {}."
-                .format(data_model.company_numbers, end_time - start_time))
-
-
-if __name__ == '__main__':
-    # get_all_symbols_and_write()
-    main()
+            self.simulate_all_stocks()
